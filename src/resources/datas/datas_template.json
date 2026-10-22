@@ -1,0 +1,17 @@
+{
+    "competence":"",
+    "description":{
+        "":""
+    },
+    "process_apply": [""],
+    "fields": [
+        {
+            "name":"",
+            "type": "",
+            "description": {
+                "": ""
+            },
+            "validations": [""]
+        }
+    ]
+}

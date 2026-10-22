@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.vscode
+
+graphify-out/
+INPUT_PATH/
+AGENTS.md
+CLAUDE.md
+improves.md
+database/docker-compose.yaml

@@ -1,0 +1,46 @@
+{
+    "competence":"kafka_message",
+    "description": {
+        "es_ES": "Este kafka_message es un objeto serializable como JSON para emitir mensajes entre un kafka_producer y un kafka_listener en el cual se contendrá la respuesta completa a una pregunta que haya formulado un usuario, así como información adicional como el modelo de datos utilizado, la tool utilizada o cualquier otra consideración relevante",
+        "en_US": "This kafka_message is a JSON serializable object for emitting messages between a kafka_producer and a kafka_listener which contains the complete answer to a user's question, as well as additional information such as the data model used, the tool utilized or any other relevant consideration."
+    },
+    "process_apply": ["ms_order", "ms_procesor"],
+    "fields": [
+        {
+            "name":"id",
+            "type": "long",
+            "description": {
+                "es_ES": "identificador único de la respuesta generada",
+                "en_US": "unique identifier of the generated response"
+            },
+            "validations": ["not null"]
+        },
+        {
+            "name":"response",
+            "type": "text",
+            "description": {
+                "es_ES": "Este campo contiene la respuesta completa que solicitó el usuario.",
+                "en_US": "This field contains the complete answer requested by the user."
+            },
+            "validations": ["not null", "not blank"]
+        },
+        {
+            "name":"model_used",
+            "type": "string",
+            "description": {
+                "es_ES": "modelo de datos utilizado para contestar a la pregunta formulada.",
+                "en_US": "data model used to answer the formulated question."
+            },
+            "validations": ["nullable"]
+        },
+        {
+            "name":"original_prompt",
+            "type": "string",
+            "description": {
+                "es_ES": "Esta es la pregunta original formulada por el usuario.",
+                "en_US": "This is the original question formulated by the user."
+            },
+            "validations": ["not null", "not blank"]
+        }
+    ]
+}

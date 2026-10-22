@@ -1,0 +1,38 @@
+{
+    "competence":"kafka_message",
+    "description": {
+        "es_ES": "kafka_message es un objeto seriablizable como JSON para emitir mensages entre un kafka_producer y un kafka_listener. El contenido del mismo es una pregunta formulada por un usuario humano, de tipo simple. deberá contestarse con acceso a una tool directa del MCP o con una consulta siempre a la base de datos. No deberá requerir contexto en la especificación de la pregunta ni razonamiento en la parte del MCP",
+        "en_US": "kafka_message is a JSON serializable object for emitting messages between a kafka_producer and a kafka_listener. Its content is a simple question formulated by a human user. It must be answered with access to a direct MCP tool or with a query always against the database. It should not require context in the question specification or reasoning part of the MCP"
+    },
+    "process_apply": ["ms_order", "ms_procesor"],
+    "type_data": "json",
+    "fields": [
+        {
+            "name":"id",
+            "type": "long",
+            "description": {
+                "es_ES": "identificador único de la pregunta",
+                "en_US": "unique identifier for the question"
+            },
+            "validations": ["not null"]
+        },
+        {
+            "name":"prompt",
+            "type": "text",
+            "description": {
+                "es_ES": "pregunta formulada por el usuario a nuestro sistema",
+                "en_US": "question formulated by the user to our system"
+            },
+            "validations": ["not null", "not blank", "not inject code"]
+        },
+        {
+            "name":"tags",
+            "type": "text",
+            "description": {
+                "es_ES": "Palabras clave o etiquetas que clasifican el contexto de la pregunta.",
+                "en_US": "Keywords or tags that classify the context of the question."
+            },
+            "validations": ["not blank"]
+        }
+    ]
+}
