@@ -1,176 +1,220 @@
-from contextlib import asynccontextmanager
-import os
-import shutil
-import time
+"""
+Tests of the Kafka update consumer.
+- Unit tests: message processing, resilience and lifecycle (no broker needed).
+- Integration tests (marker "kafka"): real producer -> topic "update" -> consumer -> resource file.
+"""
+import asyncio
+import json
+import socket
+import uuid
+from pathlib import Path
 
-from fast_depends import inject
-from kafka import KafkaProducer
 import pytest
 import pytest_asyncio
+from fast_depends import inject
 
-from mcps1.application.resources.adapters.resources_adaptator import ResourcePortOutDependency
-from mcps1.application.resources.ports.resource_port_out import ResourcePortOut
-from mcps1.domain.emun.family_resources import FamilyResource
-from mcps1.infraestructure.messaging.adapters.messaging_adaptator import KafkaPortInConsumer
-from mcps1.infraestructure.messaging.dtos.message_resource_dto import MessageResourceDTO
-from test.kafka_container_tester import producer_tester, rise_kafka_container
-from test.utils_resources import create_random_message_resources
+from mcps1.infraestructure.messaging.adapters.messaging_adaptator import KafkaConsumerUpdateDependency
+from mcps1.infraestructure.messaging.kafka_workers.kafka_consumer_update import KafkaConsumerUpdate
+from mcps1.infraestructure.messaging.ports.kafka_port_in import KafkaPortIn
+from test.kafka_container_tester import producer_tester
+from test.utils_resources import build_update_envelope, unique_name, user_example_content, wait_until
 
-@pytest_asyncio.fixture(scope="function")
-async def producer_container(global_setup) -> KafkaProducer:
-    producer: KafkaProducer = producer_tester(global_setup)
-    return producer
-
-@inject
-def get_resource_assignation(resource_assignation: ResourcePortOutDependency):
-    return resource_assignation
-
-@pytest_asyncio.fixture
-async def resource_assingantion():
-    return get_resource_assignation()
+RESOURCES_TEST = Path("test/resources")
 
 
 @inject
-@asynccontextmanager
-async def inite_consumer(initer_consumer: KafkaPortInConsumer):
-    yield initer_consumer
+def get_update_consumer(update_consumer: KafkaConsumerUpdateDependency) -> KafkaPortIn:
+    return update_consumer
+
+
+def resource_file(name: str, family: str = "datas", data_use: str = "asinc_messages", extension: str = "json") -> Path:
+    return RESOURCES_TEST / family / data_use / f"{name}.{extension}"
+
+
+def encode(message: dict) -> bytes:
+    return json.dumps(message).encode("utf-8")
+
+
+def free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+# ---------------------------------------------------------------------------
+# Unit tests (no broker)
+# ---------------------------------------------------------------------------
+
+def test_di_builds_consumer_subscribed_only_to_update():
+    consumer = get_update_consumer()
+
+    assert isinstance(consumer, KafkaConsumerUpdate)
+    assert isinstance(consumer, KafkaPortIn)
+    assert consumer.topics == ["update"]
+    assert not consumer.is_running
+
+
+def test_process_record_stores_user_example_as_resource():
+    consumer = get_update_consumer()
+    name = unique_name()
+    content = user_example_content(name)
+
+    result = consumer.process_record("update", encode(build_update_envelope(content)))
+
+    stored_file = resource_file(name)
+    assert result == str(stored_file)
+    stored = json.loads(stored_file.read_text(encoding="utf-8"))
+    assert stored["description"] == {"es_ES": content["description"][0]}
+    assert stored["competence"] == "messaging"
+    assert stored["type_data"] == "json"
+    assert stored["process_apply"] is None
+    assert stored["fields"] == content["fields"]
+    assert consumer.processed_messages == 1
+
+
+def test_process_record_update_replaces_existing_resource():
+    consumer = get_update_consumer()
+    name = unique_name()
+    first = user_example_content(name)
+    second = user_example_content(name)
+    second["competence"] = "messaging_v2"
+    second["fields"] = second["fields"][:1]
+
+    consumer.process_record("update", encode(build_update_envelope(first)))
+    consumer.process_record("update", encode(build_update_envelope(second)))
+
+    stored = json.loads(resource_file(name).read_text(encoding="utf-8"))
+    assert stored["competence"] == "messaging_v2"
+    assert len(stored["fields"]) == 1
+    assert len(list(RESOURCES_TEST.joinpath("datas").rglob(f"{name}.*"))) == 1
+
+
+def test_process_record_uses_family_and_type_of_the_envelope():
+    consumer = get_update_consumer()
+    name = unique_name()
+
+    consumer.process_record("update", encode(build_update_envelope(user_example_content(name), type_resource="database")))
+
+    assert resource_file(name, data_use="database", extension="sql").exists()
+
+
+@pytest.mark.parametrize("raw", [
+    b"{not json",
+    None,
+    encode({"any": "thing"}),
+    encode(build_update_envelope(user_example_content("../escape"))),
+    encode(user_example_content("plain_object_without_envelope")),
+])
+def test_process_record_never_raises_on_invalid_messages(raw):
+    consumer = get_update_consumer()
+
+    assert consumer.process_record("update", raw) is None
+    assert consumer.failed_messages == 1
+    assert not Path("test/escape.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_consumer_is_disabled_without_bootstrap_servers():
+    consumer = get_update_consumer()
+
+    consumer.start()
+    await asyncio.wait_for(consumer.consume_updates(), timeout=5)
+    await consumer.stop()
+
+    assert not consumer.is_running
+
+
+@pytest.mark.asyncio
+async def test_consumer_keeps_retrying_while_broker_is_down(monkeypatch):
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", f"127.0.0.1:{free_port()}")
+    consumer = get_update_consumer()
+
+    consumer.start()
+    await asyncio.sleep(1.5)  # several reconnection attempts (test backoff: 0.5s)
+
+    assert consumer.is_running
+    assert not consumer.is_connected
+    await asyncio.wait_for(consumer.stop(), timeout=5)
+    assert not consumer.is_running
+
+
+# ---------------------------------------------------------------------------
+# Integration tests (real Kafka broker)
+# ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture
-async def consumer_container():
-    yield inite_consumer()
+async def running_consumer(kafka_bootstrap, monkeypatch):
+    # dedicated consumer group per test
+    monkeypatch.setenv("CONSUMER_GROUP_ID", f"mcps-test-{uuid.uuid4().hex[:8]}")
+    consumer = get_update_consumer()
+    consumer.start()
+    yield consumer
+    await consumer.stop()
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def global_setup():
-    print("Setting up global resources...")
-    os.environ["ENVIROMENT_EXECUTION"] = "test"
-    
-    # yield inite_consumer()
-    async with rise_kafka_container() as kafka:
-        os.environ["bootstrap_servers"] = kafka.get_bootstrap_server()
-        yield kafka.get_bootstrap_server()
-        print("was end")
 
-        resources_test: str = "test/resources/"
-        for filename in os.listdir(resources_test):
-            file_path = os.path.join(resources_test, filename)
-            if os.path.isfile(file_path) or os.path.islink(file_path):
-                os.remove(file_path)
-            else:
-                shutil.rmtree(file_path)
+@pytest_asyncio.fixture
+async def producer(kafka_bootstrap):
+    kafka_producer = producer_tester(kafka_bootstrap)
+    await kafka_producer.start()
+    yield kafka_producer
+    await kafka_producer.stop()
 
-        os.environ.pop("ENVIROMENT_EXECUTION", None)
-    
 
+@pytest.mark.kafka
 @pytest.mark.asyncio
-async def test_simply_kafka_consumer(producer_container: KafkaProducer, resource_assingantion: ResourcePortOut):
-    """
-    Tests the creation and management of a generic data resource object 
-    using the DataResources model, demonstrating domain layer usage within tests.
-    """
+async def test_consumer_receives_update_message_from_producer(running_consumer, producer):
+    name = unique_name()
+    content = user_example_content(name)
 
-    message_object: MessageResourceDTO = create_random_message_resources(FamilyResource.DATAS)
-    familly: str = message_object.family_resource.value
-    type: str = message_object.type_resource.value
-    message_dict = message_object.model_dump()
-    message_dict['family_resource']=familly
-    message_dict['type_resource']=type
+    await producer.send_and_wait("update", build_update_envelope(content))
 
-    kafka_payload = {
-        "source": message_object.name_resource,
-        "type_data": message_object.family_resource.value,
-        "value": message_object.type_resource.value,
-        "dictionary_content": message_dict
-    }
-    payload = {
-        "destination": {"resource_type": message_object.family_resource.value, "resource_value": message_object.type_resource.value},
-        "message_data": kafka_payload
-    }
-    producer_container.send("update", value=payload)
-    producer_container.flush()
-    # time.sleep(10)
-    inite_consumer()
-
-    result: str = await resource_assingantion.get_data_dictionary(message_object.family_resource.value, message_object.name_resource)
-
-    # ASSERTIONS
-    assert None != result
+    assert await wait_until(lambda: resource_file(name).exists(), timeout=60), "message not processed"
+    assert running_consumer.is_connected
+    stored = json.loads(resource_file(name).read_text(encoding="utf-8"))
+    assert stored["description"] == {"es_ES": content["description"][0]}
+    assert stored["fields"] == content["fields"]
 
 
+@pytest.mark.kafka
 @pytest.mark.asyncio
-async def test_simply_kafka_consumer_multiple(producer_container: KafkaProducer, resource_assingantion: ResourcePortOut):
-    """
-    Tests the creation and management of a generic data resource object 
-    using the DataResources model, demonstrating domain layer usage within tests.
-    """
+async def test_consumer_applies_successive_updates(running_consumer, producer):
+    name = unique_name()
+    first = user_example_content(name)
+    second = user_example_content(name)
+    second["competence"] = "messaging_v2"
 
-    message_object: MessageResourceDTO = create_random_message_resources(FamilyResource.DATAS)
-    familly: str = message_object.family_resource.value
-    type: str = message_object.type_resource.value
-    message_dict = message_object.model_dump()
-    message_dict['family_resource']=familly
-    message_dict['type_resource']=type
+    await producer.send_and_wait("update", build_update_envelope(first))
+    await producer.send_and_wait("update", build_update_envelope(second))
 
-    kafka_payload = {
-        "source": message_object.name_resource,
-        "type_data": message_object.family_resource.value,
-        "value": message_object.type_resource.value,
-        "dictionary_content": message_dict
-    }
-    payload = {
-        "destination": {"resource_type": message_object.family_resource.value, "resource_value": message_object.type_resource.value},
-        "message_data": kafka_payload
-    }
-    producer_container.send("update", value=payload)
-    producer_container.flush()
+    def updated() -> bool:
+        path = resource_file(name)
+        return path.exists() and json.loads(path.read_text(encoding="utf-8"))["competence"] == "messaging_v2"
 
-    message_object_2: MessageResourceDTO = create_random_message_resources(FamilyResource.DATAS)
-    familly_2: str = message_object_2.family_resource.value
-    type_2: str = message_object_2.type_resource.value
-    message_dict = message_object_2.model_dump()
-    message_dict['family_resource']=familly_2
-    message_dict['type_resource']=type_2
+    assert await wait_until(updated, timeout=60), "update not applied"
 
-    kafka_payload_2 = {
-        "source": message_object_2.name_resource,
-        "type_data": message_object_2.family_resource.value,
-        "value": message_object_2.type_resource.value,
-        "dictionary_content": message_dict
-    }
-    payload_2 = {
-        "destination": {"resource_type": message_object_2.family_resource.value, "resource_value": message_object_2.type_resource.value},
-        "message_data": kafka_payload_2
-    }
-    producer_container.send("update", value=payload_2)
-    producer_container.flush()
 
-    message_object_3: MessageResourceDTO = create_random_message_resources(FamilyResource.DATAS)
-    familly_3: str = message_object_3.family_resource.value
-    type_3: str = message_object_3.type_resource.value
-    message_dict = message_object_3.model_dump()
-    message_dict['family_resource']=familly_3
-    message_dict['type_resource']=type_3
+@pytest.mark.kafka
+@pytest.mark.asyncio
+async def test_consumer_survives_invalid_messages(running_consumer, producer):
+    name = unique_name()
 
-    kafka_payload_3 = {
-        "source": message_object_3.name_resource,
-        "type_data": message_object_3.family_resource.value,
-        "value": message_object_3.type_resource.value,
-        "dictionary_content": message_dict
-    }
-    payload_3 = {
-        "destination": {"resource_type": message_object_3.family_resource.value, "resource_value": message_object_3.type_resource.value},
-        "message_data": kafka_payload_3
-    }
-    producer_container.send("update", value=payload_3)
-    producer_container.flush()
+    await producer.send_and_wait("update", "not an envelope")
+    await producer.send_and_wait("update", {"message_data": {"family_resource": "datas"}})
+    await producer.send_and_wait("update", build_update_envelope(user_example_content(name)))
 
-    # time.sleep(10)
-    inite_consumer()
+    assert await wait_until(lambda: resource_file(name).exists(), timeout=60), "valid message not processed"
+    assert running_consumer.failed_messages >= 2
+    assert running_consumer.is_running
 
-    result: str = await resource_assingantion.get_data_dictionary(message_object.family_resource.value, message_object.name_resource)
-    result2: str = await resource_assingantion.get_data_dictionary(message_object_2.family_resource.value, message_object_2.name_resource)
-    result3: str = await resource_assingantion.get_data_dictionary(message_object_3.family_resource.value, message_object_3.name_resource)
 
-    # ASSERTIONS
-    assert None != result
-    assert None != result2
-    assert None != result3
+@pytest.mark.kafka
+@pytest.mark.asyncio
+async def test_consumer_only_listens_update_topic(running_consumer, producer):
+    ignored = unique_name("ignored")
+    processed = unique_name()
+
+    await producer.send_and_wait("create", build_update_envelope(user_example_content(ignored)))
+    await producer.send_and_wait("update", build_update_envelope(user_example_content(processed)))
+
+    assert await wait_until(lambda: resource_file(processed).exists(), timeout=60)
+    assert not resource_file(ignored).exists()

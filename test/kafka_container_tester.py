@@ -1,37 +1,39 @@
-
 import contextlib
 import json
+import os
+from typing import Iterator
 
-from kafka import KafkaConsumer, KafkaProducer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
-from testcontainers.community.kafka import KafkaContainer
+# Set this variable to run the Kafka tests against an existing broker instead of Testcontainers
+EXTERNAL_BOOTSTRAP_ENV = "KAFKA_TEST_BOOTSTRAP_SERVERS"
 
 
-@contextlib.asynccontextmanager
-async def rise_kafka_container():
-    with KafkaContainer(port=9094) as kafka:
-        try:
-            yield kafka
-        except Exception as e:
-            print(e)
-            kafka.stop()
-            raise
-        finally:
-            kafka.stop()
+@contextlib.contextmanager
+def rise_kafka_container() -> Iterator[str]:
+    """Yields the bootstrap servers of a Kafka broker: the external one or a Testcontainers broker."""
+    external = os.getenv(EXTERNAL_BOOTSTRAP_ENV)
+    if external:
+        yield external
+        return
 
-def consumer_tester(bootstrap, topic) -> KafkaConsumer:
-    consumer = KafkaConsumer(
+    from testcontainers.community.kafka import KafkaContainer
+    with KafkaContainer().with_kraft() as kafka:
+        yield kafka.get_bootstrap_server()
+
+
+def consumer_tester(bootstrap: str, topic: str, group_id: str | None = None) -> AIOKafkaConsumer:
+    return AIOKafkaConsumer(
         topic,
         bootstrap_servers=bootstrap,
+        group_id=group_id,
         auto_offset_reset="earliest",
         value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-        consumer_timeout_ms=5000
     )
-    return consumer
 
-def producer_tester(bootstrap) -> KafkaProducer:
-    producer = KafkaProducer(
+
+def producer_tester(bootstrap: str) -> AIOKafkaProducer:
+    return AIOKafkaProducer(
         bootstrap_servers=bootstrap,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
     )
-    return producer

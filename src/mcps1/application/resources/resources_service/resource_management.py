@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
@@ -10,6 +11,8 @@ from mcps1.application.utils import type_file_definition
 from mcps1.domain.emun.data_use import DataUse
 from mcps1.domain.emun.family_resources import FamilyResource
 from mcps1.infraestructure.messaging.dtos.message_resource_dto import MessageResourceDTO
+
+logger = logging.getLogger("mcps1")
 
 # Nota: Se recomienda usar el decorador @injectable o inyectar estas dependencias 
 # en lugar de pasarlas manualmente para seguir la mejor práctica de FastAPI/Fast-depends.
@@ -24,9 +27,9 @@ class ResourceManagement:
         # Inyección de dependencia para la capa de mensajería
         env_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.{type_run}")) if f.is_file()][0])
         self._resource_config: Dict[str, str] = dotenv_values(env_path)
-        messaging_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.dev")) if f.is_file()][0])
+        messaging_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.{type_run}")) if f.is_file()][0])
         self._messaging_config: Dict[str, str] = dotenv_values(messaging_path)
-        print("ResourceManagement Adapter initialized. Dependencies (DB, Kafka) ready for write operations.")
+        logger.info("ResourceManagement Adapter initialized. Dependencies (DB, Kafka) ready for write operations.")
 
 
     def _store_resource(self, payload: MessageResourceDTO) -> str:
@@ -34,7 +37,7 @@ class ResourceManagement:
         Establece un nuevo recurso en el sistema. 
         TODO: Implementar lógica de persistencia real (Database Repository Layer).
         """
-        print(f"[ResourceManagement] INFO: Attempting to store a new resource record.")
+        logger.info("[ResourceManagement] Attempting to store a new resource record.")
 
         file_path: str = self._path_recource_builder(payload)
         if not payload.content:
@@ -60,7 +63,7 @@ class ResourceManagement:
         Procesa mensajes asincrónicos de Kafka y realiza la persistencia local (JSON file dump). 
         Esta función se llama desde el Consumer Listener.
         """
-        print(f"[ResourceManagement] INFO: Processing asynchronous message from topic: {topic}.")
+        logger.info(f"[ResourceManagement] Processing asynchronous message from topic: {topic}.")
         topics: list[str] = self._messaging_config['DEFAULT_TOPIC'].split(",")
         current_path: str = self._get_file_path(payload)
         if topic not in topics:

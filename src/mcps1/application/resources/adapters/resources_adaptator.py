@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Annotated
 from fast_depends import Depends, inject
@@ -7,13 +8,16 @@ from mcps1.application.resources.resources_service.resources_assignation import 
 from mcps1.infraestructure.messaging.adapters.messaging_adaptator import KafkaPortOutDependency
 
 
+logger = logging.getLogger("mcps1")
+
+
 @inject
 def get_resource_port_out(kafka_producer: KafkaPortOutDependency) -> ResourcePortOut:
     """
     Función adaptadora responsable de inicializar y devolver la 
     implementación concreta para el puerto ResourcePortOut.
     """
-    print("INFO: Inicializando ResourcesAssignment en el adaptador.")
+    logger.info("Inicializando ResourcesAssignation en el adaptador.")
 
     environment_execution = os.getenv("ENVIROMENT_EXECUTION", "dev")
     resource_object: ResourcesAssignation = ResourcesAssignation(kafka_producer, environment_execution)

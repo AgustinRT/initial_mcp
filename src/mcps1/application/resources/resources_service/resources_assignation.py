@@ -59,12 +59,13 @@ class ResourcesAssignation():
             "value": value,
             "dictionary_content": data_dict
         }
-        # The KafkaProducerService handles the 'mcps' group context. 
-        await self._kafka_producer.send_message_reporter(
+        # The KafkaProducerService handles the 'mcps' group context (best-effort: never raises).
+        reported: bool = await self._kafka_producer.send_message_reporter(
             destiny_message={"resource_type": type_data, "resource_value": value},
             message=kafka_payload
         )
-        self._logger.info("[ResourceAssignments] Kafka: Successfully published resource dictionary definition event.")
+        if reported:
+            self._logger.info("[ResourceAssignments] Kafka: Successfully published resource dictionary definition event.")
         # === END KAFKA PUBLISHING FOR RESOURCE DEFINITION EVENT ===
 
         return json.dumps(data_dict)
@@ -72,12 +73,18 @@ class ResourcesAssignation():
     def _get_resource_path(self, type_data: str, value: str) -> str:
         try:
             base_path: str = f"{self._resource_config['RESOURCES_LOCATION']}/{FamilyResource[(type_data.upper())].value}"
+            self._logger.info(f"******************base_path: {base_path}")
             file_name: str = value.split("/")[-1:][0]
+            self._logger.info(f"******************file_name: {file_name}")
             resource_path = next(Path(base_path).rglob((file_name + ".*")), None)
             return resource_path
         except Exception:
             self._logger.error(f"*******************incorrent params to define resource path")
             raise Exception("incorrent params to define resource path")
+
+    async def aclose(self) -> None:
+        """Releases the Kafka producer connection."""
+        await self._kafka_producer.close()
 
     def get_contextual_values(self, context: str) -> Any:
         """

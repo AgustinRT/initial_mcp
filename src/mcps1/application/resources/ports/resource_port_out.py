@@ -7,8 +7,8 @@ class ResourcePortOut(Protocol):
     Must implement methods for retrieving data dictionaries, 
     contextual values, and assignment communications.
     """
-    async def get_data_dictionary(self, data_dict: str) -> dict:
-        """Retrieves a data dictionary using a string identifier."""
+    async def get_data_dictionary(self, type_data: str, value: str) -> str:
+        """Retrieves a data dictionary by its family (type_data) and resource name (value)."""
         ...
 
     def get_contextual_values(self, context: str) -> any:
@@ -17,4 +17,8 @@ class ResourcePortOut(Protocol):
 
     def get_assignation_communications(self, route: str) -> any:
         """Retrieves assignment communications from the provided data stream."""
+        ...
+
+    async def aclose(self) -> None:
+        """Releases the infrastructure used by the service (e.g. the Kafka producer)."""
         ...

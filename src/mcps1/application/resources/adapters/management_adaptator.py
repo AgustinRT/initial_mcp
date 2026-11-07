@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Annotated
 from fast_depends import Depends
@@ -6,12 +7,15 @@ from mcps1.application.resources.ports.resource_maintender_port_in import Resour
 from mcps1.application.resources.resources_service.resource_management import ResourceManagement
 
 
+logger = logging.getLogger("mcps1")
+
+
 def get_management_port_in() -> ResourceMaintenderPortIn:
     """
     Función adaptadora responsable de inicializar y devolver la 
     implementación concreta para el puerto ResourceMaintenderPortIn.
     """
-    print("INFO: Inicializando ResourcesAssignment en el adaptador.")
+    logger.info("Inicializando ResourceManagement en el adaptador.")
     environment_execution = os.getenv("ENVIROMENT_EXECUTION", "dev")
     manger_object: ResourceManagement = ResourceManagement(environment_execution)
     return manger_object

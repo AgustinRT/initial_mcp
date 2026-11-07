@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from src.mcps1.application.tools.mathgames import MathGames
+from mcps1.application.tools.mathgames import MathGames
 
 mathgames: MathGames = MathGames()
 
